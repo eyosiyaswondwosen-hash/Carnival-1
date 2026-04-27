@@ -208,7 +208,7 @@ function MyTicket({ go, data, notify }) {
 function Admin({ go, data, confirm, auth, setAuth, notify }) {
   const [pin, setPin] = useState("");
   const [fl, setFl] = useState("all");
-  const PIN = "9211";
+  const PIN = "4319";
   if (!auth) return (
     <div style={s.pg}><Nav go={go} title="Admin" /><div style={s.card}>
       <div style={{ fontSize: 40, textAlign: "center", marginBottom: 12 }}>🔒</div>
