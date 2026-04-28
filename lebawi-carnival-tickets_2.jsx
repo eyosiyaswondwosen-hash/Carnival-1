@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { supabase } from "./lib/supabase.js";
 
 function generateQRCodeSVG(text, size = 160) {
   const hash = (str) => { let h = 0; for (let i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; } return Math.abs(h); };
@@ -19,20 +20,79 @@ const C = { bg: "#0A0712", sf: "#130F1F", card: "#1A1528", bd: "#2A2240", bdL: "
 
 export default function App() {
   const [pg, setPg] = useState("home");
-  const [data, setData] = useState(loadData());
+  const [data, setData] = useState({ tickets: [], nextId: 1001 });
   const [auth, setAuth] = useState(false);
   const [notif, setNotif] = useState(null);
-  useEffect(() => { saveData(data); }, [data]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadTicketsFromSupabase();
+  }, []);
+
+  const loadTicketsFromSupabase = async () => {
+    try {
+      const { data: tickets, error } = await supabase
+        .from('tickets')
+        .select('*')
+        .order('id', { ascending: false });
+      
+      if (error) throw error;
+      setData({ tickets: tickets || [], nextId: Math.max(...(tickets?.map(t => t.id) || [0])) + 1 });
+    } catch (error) {
+      console.error('Error loading tickets:', error);
+      setData({ tickets: [], nextId: 1001 });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const notify = (m, t = "success") => { setNotif({ m, t }); setTimeout(() => setNotif(null), 3500); };
-  const addTickets = (tks) => setData(p => ({ ...p, tickets: [...p.tickets, ...tks], nextId: p.nextId + tks.length }));
-  const confirmPay = (id, groupId) => setData(p => ({ ...p, tickets: p.tickets.map(t => (groupId ? t.groupId === groupId : t.id === id) ? { ...t, status: "confirmed" } : t) }));
-  const validate = (code) => {
-    const tk = data.tickets.find(t => genCode(t.id) === code || t.id.toString() === code);
-    if (!tk) return { ok: false, msg: "Ticket not found" };
-    if (tk.status === "pending") return { ok: false, msg: "Payment not confirmed yet", tk };
-    if (tk.scannedAt) return { ok: false, msg: `Already scanned at ${new Date(tk.scannedAt).toLocaleTimeString()}`, tk };
-    setData(p => ({ ...p, tickets: p.tickets.map(t => t.id === tk.id ? { ...t, scannedAt: new Date().toISOString() } : t) }));
-    return { ok: true, msg: "Entry approved!", tk };
+  
+  const addTickets = async (tks) => {
+    try {
+      const { error } = await supabase.from('tickets').insert(tks);
+      if (error) throw error;
+      await loadTicketsFromSupabase();
+    } catch (error) {
+      console.error('Error adding tickets:', error);
+      notify('Error saving tickets', 'error');
+    }
+  };
+
+  const confirmPay = async (id, groupId) => {
+    try {
+      const updateData = { status: 'confirmed' };
+      const query = groupId 
+        ? supabase.from('tickets').update(updateData).eq('group_id', groupId)
+        : supabase.from('tickets').update(updateData).eq('id', id);
+      
+      const { error } = await query;
+      if (error) throw error;
+      await loadTicketsFromSupabase();
+    } catch (error) {
+      console.error('Error confirming payment:', error);
+    }
+  };
+
+  const validate = async (code) => {
+    try {
+      const tk = data.tickets.find(t => genCode(t.id) === code || t.id.toString() === code);
+      if (!tk) return { ok: false, msg: "Ticket not found" };
+      if (tk.status === "pending") return { ok: false, msg: "Payment not confirmed yet", tk };
+      if (tk.scanned_at) return { ok: false, msg: `Already scanned at ${new Date(tk.scanned_at).toLocaleTimeString()}`, tk };
+      
+      const { error } = await supabase
+        .from('tickets')
+        .update({ scanned_at: new Date().toISOString() })
+        .eq('id', tk.id);
+      
+      if (error) throw error;
+      await loadTicketsFromSupabase();
+      return { ok: true, msg: "Entry approved!", tk };
+    } catch (error) {
+      console.error('Error validating ticket:', error);
+      return { ok: false, msg: "Error scanning ticket", tk: null };
+    }
   };
 
   return (
@@ -92,22 +152,45 @@ function Stat({ value, label, color }) {
 function Buy({ go, add, notify, data }) {
   const [f, setF] = useState({ name: "", phone: "", email: "", quantity: 1, paymentMethod: "", paymentScreenshot: null, screenshotName: "" });
   const [done, setDone] = useState(null);
+  const [uploading, setUploading] = useState(false);
   const ref = useRef(null);
 
   const TICKET_CAP = 1000;
-  const soldTickets = data.tickets.length;
+  const soldTickets = data.tickets.filter(t => t.status === 'confirmed').length;
 
-  const submit = () => {
+  const submit = async () => {
     if (!f.name.trim() || !f.phone.trim()) return notify("Please fill in name and phone", "error");
     if (!f.paymentMethod) return notify("Select a payment method", "error");
     if (!f.paymentScreenshot) return notify("Upload payment screenshot", "error");
     if (soldTickets + f.quantity > TICKET_CAP) return notify(soldTickets >= TICKET_CAP ? "Sorry, tickets are sold out!" : `Only ${TICKET_CAP - soldTickets} tickets remaining`, "error");
-    const groupId = `g-${Date.now()}`;
-    const base = { name: f.name, phone: f.phone, email: f.email, paymentMethod: f.paymentMethod, paymentScreenshot: f.paymentScreenshot, screenshotName: f.screenshotName, status: "pending", createdAt: new Date().toISOString(), groupId, groupTotal: f.quantity, quantity: 1, totalAmount: 600 };
-    const newTickets = Array.from({ length: f.quantity }, (_, i) => ({ ...base, id: data.nextId + i, ticketIndex: i + 1 }));
-    add(newTickets);
-    setDone(newTickets.map(tk => ({ ...tk, code: genCode(tk.id) })));
-    notify("Ticket reserved! Awaiting verification.");
+    
+    setUploading(true);
+    try {
+      const groupId = `g-${Date.now()}`;
+      const base = { 
+        name: f.name, 
+        phone: f.phone, 
+        email: f.email, 
+        payment_method: f.paymentMethod, 
+        payment_screenshot: f.paymentScreenshot, 
+        screenshot_name: f.screenshotName, 
+        status: "pending", 
+        created_at: new Date().toISOString(), 
+        group_id: groupId, 
+        group_total: f.quantity, 
+        quantity: 1, 
+        total_amount: 600 
+      };
+      const newTickets = Array.from({ length: f.quantity }, (_, i) => ({ ...base, ticket_index: i + 1 }));
+      await add(newTickets);
+      setDone(newTickets.map((tk, idx) => ({ ...tk, id: data.nextId + idx, code: genCode(data.nextId + idx) })));
+      notify("Ticket reserved! Awaiting verification.");
+    } catch (error) {
+      notify('Error creating tickets', 'error');
+      console.error(error);
+    } finally {
+      setUploading(false);
+    }
   };
 
   if (done) return (
@@ -144,7 +227,7 @@ function Buy({ go, add, notify, data }) {
         <div style={s.totBar}><span style={s.totL}>Total</span><span style={s.totA}>{f.quantity * 600} Birr</span></div>
 
         <div style={s.secH}><div style={s.secL} /><span style={s.secT}>Payment</span><div style={s.secL} /></div>
-        <p style={s.payH}>Transfer <strong style={{ color: C.gold }}>{f.quantity * 700} Birr</strong> to one of the accounts below, then upload your confirmation screenshot.</p>
+        <p style={s.payH}>Transfer <strong style={{ color: C.gold }}>{f.quantity * 600} Birr</strong> to one of the accounts below, then upload your confirmation screenshot.</p>
 
         <div style={{ ...s.payO, ...(f.paymentMethod === "cbe" ? s.payOA : {}) }} onClick={() => setF({ ...f, paymentMethod: "cbe" })}>
           <div style={s.payOL}><div style={{ ...s.radio, ...(f.paymentMethod === "cbe" ? s.radioA : {}) }}>{f.paymentMethod === "cbe" && <div style={s.radioD} />}</div><div><div style={s.payN}>Commercial Bank of Ethiopia</div><div style={s.payAc}>Account: 10002342867</div><div style={s.payHo}>Name: Amanawit feleke and Nehimia Bahiru</div></div></div><span style={s.payI}>🏦</span>
@@ -207,22 +290,33 @@ function MyTicket({ go, data, notify }) {
 }
 
 function Admin({ go, data, confirm, auth, setAuth, notify }) {
-  const [pin, setPin] = useState("");
+  const [psw, setPsw] = useState("");
   const [fl, setFl] = useState("all");
-  const PIN = "9211";
-  if (!auth) return (
-    <div style={s.pg}><Nav go={go} title="Admin" /><div style={s.card}>
-      <div style={{ fontSize: 40, textAlign: "center", marginBottom: 12 }}>🔒</div>
-      <h2 style={s.cH}>Admin Access</h2><p style={s.cS}>Enter PIN to continue</p>
-      <Fld label=""><input style={{ ...s.inp, textAlign: "center", letterSpacing: 10, fontSize: 22, fontWeight: 700 }} placeholder="• • • •" type="password" maxLength={4} value={pin} onChange={e => setPin(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { pin === PIN ? setAuth(true) : notify("Incorrect PIN", "error"); }}} /></Fld>
-      <button style={{ ...s.btn1, width: "100%" }} onClick={() => { pin === PIN ? setAuth(true) : notify("Incorrect PIN", "error"); }}>Enter</button>
-      <p style={{ fontSize: 11, color: C.txD, textAlign: "center", marginTop: 10 }}>Default PIN: 2026</p>
-    </div></div>
-  );
 
-  const tks = data.tickets, conf = tks.filter(t => t.status === "confirmed"), pend = tks.filter(t => t.status === "pending"), scnd = tks.filter(t => t.scannedAt);
-  const rev = conf.reduce((a, t) => a + (t.groupTotal > 1 ? t.groupTotal * 600 : t.totalAmount), 0), qty = tks.reduce((a, t) => a + t.quantity, 0);
+  const tks = data.tickets, conf = tks.filter(t => t.status === "confirmed"), pend = tks.filter(t => t.status === "pending"), scnd = tks.filter(t => t.scanned_at);
+  const rev = conf.reduce((a, t) => a + (t.group_total > 1 ? t.group_total * 600 : t.total_amount), 0), qty = tks.reduce((a, t) => a + t.quantity, 0);
   const list = fl === "all" ? tks : fl === "confirmed" ? conf : fl === "pending" ? pend : scnd;
+
+  const checkAuth = () => {
+    if (psw === "lebawi2026") {
+      setAuth(true);
+      setPsw("");
+      notify("Access granted!");
+    } else {
+      notify("Incorrect password", "error");
+    }
+  };
+
+  if (!auth) return (
+    <div style={s.pg}><Nav go={go} title="Admin Dashboard" />
+      <div style={s.card}>
+        <h2 style={s.cH}>Admin Access Required</h2>
+        <p style={s.cS}>Enter the admin password to continue.</p>
+        <input style={s.inp} type="password" placeholder="Enter password" value={psw} onChange={e => setPsw(e.target.value)} onKeyDown={e => e.key === "Enter" && checkAuth()} />
+        <button style={{ ...s.btn1, width: "100%", marginTop: 12 }} onClick={checkAuth} className="bh">Login</button>
+      </div>
+    </div>
+  );
 
   return (
     <div style={s.pg}><Nav go={go} title="Dashboard" />
@@ -237,13 +331,13 @@ function Admin({ go, data, confirm, auth, setAuth, notify }) {
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 13, color: C.txM, marginBottom: 8 }}>
               <span>📱 {t.phone}</span>
-              <span>🎟 {t.groupTotal > 1 ? `${t.ticketIndex}/${t.groupTotal}` : "×1"}</span>
-              <span>💰 {t.groupTotal > 1 ? `${t.groupTotal * 600} Birr total` : `${t.totalAmount} Birr`}</span>
-              {t.paymentMethod && <span>💳 {t.paymentMethod === "cbe" ? "CBE" : "Telebirr"}</span>}
-              {t.scannedAt && <span>✅ Scanned</span>}
+              <span>🎟 {t.group_total > 1 ? `${t.ticket_index}/${t.group_total}` : "×1"}</span>
+              <span>💰 {t.group_total > 1 ? `${t.group_total * 600} Birr total` : `${t.total_amount} Birr`}</span>
+              {t.payment_method && <span>💳 {t.payment_method === "cbe" ? "CBE" : "Telebirr"}</span>}
+              {t.scanned_at && <span>✅ Scanned</span>}
             </div>
-            {t.paymentScreenshot && <div style={{ marginBottom: 10 }}><div style={{ fontSize: 11, color: C.txD, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Payment Proof</div><img src={t.paymentScreenshot} alt="proof" style={{ width: "100%", maxHeight: 180, objectFit: "contain", borderRadius: 8, border: `1px solid ${C.bd}`, background: C.bg }} /></div>}
-            {t.status === "pending" && <button style={s.confB} onClick={() => { confirm(t.id, t.groupId); notify(`Confirmed: ${t.name}${t.groupTotal > 1 ? ` (${t.groupTotal} tickets)` : ""}`); }}>Confirm Payment ✓{t.groupTotal > 1 ? ` (${t.groupTotal} tickets)` : ""}</button>}
+            {t.payment_screenshot && <div style={{ marginBottom: 10 }}><div style={{ fontSize: 11, color: C.txD, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Payment Proof</div><img src={t.payment_screenshot} alt="proof" style={{ width: "100%", maxHeight: 180, objectFit: "contain", borderRadius: 8, border: `1px solid ${C.bd}`, background: C.bg }} /></div>}
+            {t.status === "pending" && <button style={s.confB} onClick={() => { confirm(t.id, t.group_id); notify(`Confirmed: ${t.name}${t.group_total > 1 ? ` (${t.group_total} tickets)` : ""}`); }}>Confirm Payment ✓{t.group_total > 1 ? ` (${t.group_total} tickets)` : ""}</button>}
           </div>
         ))}
       </div>
