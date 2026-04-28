@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./lib/supabase.js";
+import { getAdminPassword, setAdminPassword, clearAdminPasswordCache } from "./lib/adminConfig.js";
 
 function generateQRCodeSVG(text, size = 160) {
   const hash = (str) => { let h = 0; for (let i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; } return Math.abs(h); };
@@ -24,22 +25,38 @@ export default function App() {
   const [auth, setAuth] = useState(false);
   const [notif, setNotif] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [adminPassword, setAdminPassword] = useState(null);
 
   useEffect(() => {
-    loadTicketsFromSupabase();
+    console.log('[v0] App mounted, initializing data');
+    initializeApp();
   }, []);
+
+  const initializeApp = async () => {
+    try {
+      console.log('[v0] Initializing app');
+      await loadTicketsFromSupabase();
+      const password = await getAdminPassword();
+      console.log('[v0] Admin password loaded:', password ? 'success' : 'failed');
+      setAdminPassword(password);
+    } catch (error) {
+      console.error('[v0] Error initializing app:', error);
+    }
+  };
 
   const loadTicketsFromSupabase = async () => {
     try {
+      console.log('[v0] Loading tickets from Supabase');
       const { data: tickets, error } = await supabase
         .from('tickets')
         .select('*')
         .order('id', { ascending: false });
       
       if (error) throw error;
+      console.log('[v0] Tickets loaded:', tickets?.length || 0);
       setData({ tickets: tickets || [], nextId: Math.max(...(tickets?.map(t => t.id) || [0])) + 1 });
     } catch (error) {
-      console.error('Error loading tickets:', error);
+      console.error('[v0] Error loading tickets:', error);
       setData({ tickets: [], nextId: 1001 });
     } finally {
       setLoading(false);
@@ -102,7 +119,7 @@ export default function App() {
       {notif && <div style={{ ...s.notif, background: notif.t === "success" ? C.grn : C.red, color: C.bg }}>{notif.m}</div>}
       {pg === "home" && <Home go={setPg} />}
       {pg === "buy" && <Buy go={setPg} add={addTickets} notify={notify} data={data} />}
-      {pg === "admin" && <Admin go={setPg} data={data} confirm={confirmPay} auth={auth} setAuth={setAuth} notify={notify} />}
+      {pg === "admin" && <Admin go={setPg} data={data} confirm={confirmPay} auth={auth} setAuth={setAuth} notify={notify} adminPassword={adminPassword} />}
       {pg === "scan" && <Scan go={setPg} validate={validate} notify={notify} />}
       {pg === "myticket" && <MyTicket go={setPg} data={data} notify={notify} />}
     </div>
@@ -289,7 +306,7 @@ function MyTicket({ go, data, notify }) {
   );
 }
 
-function Admin({ go, data, confirm, auth, setAuth, notify }) {
+function Admin({ go, data, confirm, auth, setAuth, notify, adminPassword }) {
   const [psw, setPsw] = useState("");
   const [fl, setFl] = useState("all");
 
@@ -298,11 +315,15 @@ function Admin({ go, data, confirm, auth, setAuth, notify }) {
   const list = fl === "all" ? tks : fl === "confirmed" ? conf : fl === "pending" ? pend : scnd;
 
   const checkAuth = () => {
-    if (psw === "lebawi2026") {
+    console.log('[v0] Checking admin password');
+    const correctPassword = adminPassword || "9134";
+    if (psw === correctPassword) {
+      console.log('[v0] Admin password correct');
       setAuth(true);
       setPsw("");
       notify("Access granted!");
     } else {
+      console.log('[v0] Admin password incorrect');
       notify("Incorrect password", "error");
     }
   };
