@@ -230,7 +230,7 @@ function Buy({ go, add, notify, data }) {
         <p style={s.payH}>Transfer <strong style={{ color: C.gold }}>{f.quantity * 600} Birr</strong> to one of the accounts below, then upload your confirmation screenshot.</p>
 
         <div style={{ ...s.payO, ...(f.paymentMethod === "cbe" ? s.payOA : {}) }} onClick={() => setF({ ...f, paymentMethod: "cbe" })}>
-          <div style={s.payOL}><div style={{ ...s.radio, ...(f.paymentMethod === "cbe" ? s.radioA : {}) }}>{f.paymentMethod === "cbe" && <div style={s.radioD} />}</div><div><div style={s.payN}>Commercial Bank of Ethiopia</div><div style={s.payAc}>Account: 10002342867</div><div style={s.payHo}>Name: Amanawit feleke and Nehimia Bahiru</div></div></div><span style={s.payI}>🏦</span>
+          <div style={s.payOL}><div style={{ ...s.radio, ...(f.paymentMethod === "cbe" ? s.radioA : {}) }}>{f.paymentMethod === "cbe" && <div style={s.radioD} />}</div><div><div style={s.payN}>Commercial Bank of Ethiopia</div><div style={s.payAc}>Account: 1000763127668</div><div style={s.payHo}>Name: Nehimia Bahiru Hunde</div></div></div><span style={s.payI}>🏦</span>
         </div>
         <div style={{ ...s.payO, ...(f.paymentMethod === "telebirr" ? s.payOA : {}) }} onClick={() => setF({ ...f, paymentMethod: "telebirr" })}>
           <div style={s.payOL}><div style={{ ...s.radio, ...(f.paymentMethod === "telebirr" ? s.radioA : {}) }}>{f.paymentMethod === "telebirr" && <div style={s.radioD} />}</div><div><div style={s.payN}>Telebirr</div><div style={s.payAc}>Phone: +251 967 0501 88</div><div style={s.payHo}>Name: Selam</div></div></div><span style={s.payI}>📱</span>
