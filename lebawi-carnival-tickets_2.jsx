@@ -144,6 +144,8 @@ function Home({ go }) {
           <button style={s.btn2} onClick={() => go("myticket")} className="bh">View My Ticket</button>
         </div>
         <div style={s.hLinks}>
+          <button style={s.fLink} onClick={() => go("admin")}>Admin Dashboard</button>
+          <span style={{ color: C.bdL }}>|</span>
           <button style={s.fLink} onClick={() => go("myticket")}>View My Ticket</button>
           <span style={{ color: C.bdL }}>|</span>
           <button style={s.fLink} onClick={() => go("scan")}>Gate Scanner</button>
