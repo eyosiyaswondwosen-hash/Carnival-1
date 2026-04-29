@@ -1,4 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
+import { createClient as createSupabaseClient } from "./lib/supabase/client.js";
+
+const supabase = createSupabaseClient();
 
 function generateQRCodeSVG(text, size = 160) {
   const hash = (str) => { let h = 0; for (let i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; } return Math.abs(h); };
@@ -19,20 +22,11 @@ const C = { bg: "#0A0712", sf: "#130F1F", card: "#1A1528", bd: "#2A2240", bdL: "
 
 export default function App() {
   const [pg, setPg] = useState("home");
-  const [data, setData] = useState(loadData());
-  const [auth, setAuth] = useState(false);
   const [notif, setNotif] = useState(null);
-  useEffect(() => { saveData(data); }, [data]);
-  const notify = (m, t = "success") => { setNotif({ m, t }); setTimeout(() => setNotif(null), 3500); };
-  const addTickets = (tks) => setData(p => ({ ...p, tickets: [...p.tickets, ...tks], nextId: p.nextId + tks.length }));
-  const confirmPay = (id, groupId) => setData(p => ({ ...p, tickets: p.tickets.map(t => (groupId ? t.groupId === groupId : t.id === id) ? { ...t, status: "confirmed" } : t) }));
-  const validate = (code) => {
-    const tk = data.tickets.find(t => genCode(t.id) === code || t.id.toString() === code);
-    if (!tk) return { ok: false, msg: "Ticket not found" };
-    if (tk.status === "pending") return { ok: false, msg: "Payment not confirmed yet", tk };
-    if (tk.scannedAt) return { ok: false, msg: `Already scanned at ${new Date(tk.scannedAt).toLocaleTimeString()}`, tk };
-    setData(p => ({ ...p, tickets: p.tickets.map(t => t.id === tk.id ? { ...t, scannedAt: new Date().toISOString() } : t) }));
-    return { ok: true, msg: "Entry approved!", tk };
+
+  const notify = (m, t = "success") => {
+    setNotif({ m, t });
+    setTimeout(() => setNotif(null), 3500);
   };
 
   return (
@@ -41,10 +35,9 @@ export default function App() {
       <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
       {notif && <div style={{ ...s.notif, background: notif.t === "success" ? C.grn : C.red, color: C.bg }}>{notif.m}</div>}
       {pg === "home" && <Home go={setPg} />}
-      {pg === "buy" && <Buy go={setPg} add={addTickets} notify={notify} data={data} />}
-      {pg === "admin" && <Admin go={setPg} data={data} confirm={confirmPay} auth={auth} setAuth={setAuth} notify={notify} />}
-      {pg === "scan" && <Scan go={setPg} validate={validate} notify={notify} />}
-      {pg === "myticket" && <MyTicket go={setPg} data={data} notify={notify} />}
+      {pg === "buy" && <Buy go={setPg} notify={notify} />}
+      {pg === "scan" && <Scan go={setPg} notify={notify} />}
+      {pg === "myticket" && <MyTicket go={setPg} notify={notify} />}
     </div>
   );
 }
@@ -57,16 +50,19 @@ function Home({ go }) {
       <div style={s.hContent}>
         <div style={s.hBadge}>LEBAWI INTERNATIONAL ACADEMY</div>
         <h1 style={s.hTitle}>CARNIVAL</h1>
+        <p style={s.hSubtitle}>Ethioballers X Lebawi</p>
         <div style={s.hDiv}><div style={s.hDivLine} /><div style={s.hDivDia}>◆</div><div style={s.hDivLine} /></div>
         <p style={s.hYear}>2026</p>
         <p style={s.hDesc}>An evening of celebration, community, and unforgettable memories</p>
-        <div style={s.hPrice}><span style={s.hPrL}>ENTRY</span><span style={s.hPrA}>700</span><span style={s.hPrC}>BIRR</span></div>
+        <div style={s.hPrice}><span style={s.hPrL}>ENTRY</span><span style={s.hPrA}>600</span><span style={s.hPrC}>BIRR</span></div>
         <div style={s.hBtns}>
           <button style={s.btn1} onClick={() => go("buy")} className="bh">Purchase Ticket</button>
           <button style={s.btn2} onClick={() => go("myticket")} className="bh">View My Ticket</button>
         </div>
         <div style={s.hLinks}>
-          <button style={s.fLink} onClick={() => go("admin")}>Admin Dashboard</button>
+          <a href="/admin" style={{ ...s.fLink, textDecoration: "none" }}>Admin Dashboard</a>
+          <span style={{ color: C.bdL }}>|</span>
+          <button style={s.fLink} onClick={() => go("myticket")}>View My Ticket</button>
           <span style={{ color: C.bdL }}>|</span>
           <button style={s.fLink} onClick={() => go("scan")}>Gate Scanner</button>
         </div>
@@ -88,25 +84,52 @@ function Stat({ value, label, color }) {
   return <div style={s.stat}><div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'Cormorant Garamond', serif", color: color || C.tx }}>{value}</div><div style={{ fontSize: 10, color: C.txM, marginTop: 2, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div></div>;
 }
 
-function Buy({ go, add, notify, data }) {
+function Buy({ go, notify }) {
   const [f, setF] = useState({ name: "", phone: "", email: "", quantity: 1, paymentMethod: "", paymentScreenshot: null, screenshotName: "" });
   const [done, setDone] = useState(null);
+  const [uploading, setUploading] = useState(false);
   const ref = useRef(null);
 
-  const TICKET_CAP = 1000;
-  const soldTickets = data.tickets.length;
-
-  const submit = () => {
+  const submit = async () => {
     if (!f.name.trim() || !f.phone.trim()) return notify("Please fill in name and phone", "error");
     if (!f.paymentMethod) return notify("Select a payment method", "error");
     if (!f.paymentScreenshot) return notify("Upload payment screenshot", "error");
-    if (soldTickets + f.quantity > TICKET_CAP) return notify(soldTickets >= TICKET_CAP ? "Sorry, tickets are sold out!" : `Only ${TICKET_CAP - soldTickets} tickets remaining`, "error");
-    const groupId = `g-${Date.now()}`;
-    const base = { name: f.name, phone: f.phone, email: f.email, paymentMethod: f.paymentMethod, paymentScreenshot: f.paymentScreenshot, screenshotName: f.screenshotName, status: "pending", createdAt: new Date().toISOString(), groupId, groupTotal: f.quantity, quantity: 1, totalAmount: 700 };
-    const newTickets = Array.from({ length: f.quantity }, (_, i) => ({ ...base, id: data.nextId + i, ticketIndex: i + 1 }));
-    add(newTickets);
-    setDone(newTickets.map(tk => ({ ...tk, code: genCode(tk.id) })));
-    notify("Ticket reserved! Awaiting verification.");
+
+    setUploading(true);
+    try {
+      const res = await fetch("/api/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: f.name,
+          phone: f.phone,
+          email: f.email,
+          quantity: f.quantity,
+          paymentMethod: f.paymentMethod,
+          paymentScreenshot: f.paymentScreenshot,
+          screenshotName: f.screenshotName,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        notify(data.error || "Failed to reserve tickets", "error");
+        return;
+      }
+      const tickets = data.tickets || [];
+      setDone(
+        tickets.map((tk) => ({
+          ...tk,
+          paymentMethod: tk.payment_method,
+          code: genCode(tk.id),
+        }))
+      );
+      notify("Ticket reserved! Awaiting verification.");
+    } catch (err) {
+      console.error("[v0] Buy error", err);
+      notify("Network error. Please try again.", "error");
+    } finally {
+      setUploading(false);
+    }
   };
 
   if (done) return (
@@ -120,7 +143,7 @@ function Buy({ go, add, notify, data }) {
             <div style={s.iBoxH}><div style={s.iBoxT}>LEBAWI CARNIVAL{done.length > 1 ? ` — Ticket ${i + 1} of ${done.length}` : ""}</div><div style={s.iBoxC}>{tk.code}</div></div>
             <div style={s.iBoxD} />
             <IRow label="Name" value={tk.name} />
-            {i === 0 && <><IRow label="Quantity" value={done.length} /><IRow label="Total" value={`${done.length * 700} Birr`} /><IRow label="Payment" value={tk.paymentMethod === "cbe" ? "CBE" : "Telebirr"} /></>}
+            {i === 0 && <><IRow label="Quantity" value={done.length} /><IRow label="Total" value={`${done.length * 600} Birr`} /><IRow label="Payment" value={tk.paymentMethod === "cbe" ? "CBE" : "Telebirr"} /></>}
             <IRow label="Status" badge="pending" value="Awaiting Verification" />
           </div>
         ))}
@@ -132,7 +155,7 @@ function Buy({ go, add, notify, data }) {
   return (
     <div style={s.pg}><Nav go={go} title="Purchase Ticket" />
       <div style={s.card}>
-        <div style={s.fmH}><div><h2 style={s.fmT}>Lebawi Carnival</h2><p style={s.fmS}>Entry Ticket — 700 Birr</p></div><div style={s.fmBadge}>2026</div></div>
+        <div style={s.fmH}><div><h2 style={s.fmT}>Lebawi Carnival</h2><p style={s.fmS}>Entry Ticket — 600 Birr</p></div><div style={s.fmBadge}>2026</div></div>
         <div style={s.divT} />
         <Fld label="Full Name" req><input style={s.inp} placeholder="Enter your full name" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} /></Fld>
         <Fld label="Phone Number" req><input style={s.inp} placeholder="+251 9XX XXX XXXX" value={f.phone} onChange={e => setF({ ...f, phone: e.target.value })} /></Fld>
@@ -140,16 +163,16 @@ function Buy({ go, add, notify, data }) {
         <Fld label="Number of Tickets">
           <div style={s.qR}><button style={s.qB} onClick={() => setF({ ...f, quantity: Math.max(1, f.quantity - 1) })}>−</button><span style={s.qN}>{f.quantity}</span><button style={s.qB} onClick={() => setF({ ...f, quantity: Math.min(10, f.quantity + 1) })}>+</button></div>
         </Fld>
-        <div style={s.totBar}><span style={s.totL}>Total</span><span style={s.totA}>{f.quantity * 700} Birr</span></div>
+        <div style={s.totBar}><span style={s.totL}>Total</span><span style={s.totA}>{f.quantity * 600} Birr</span></div>
 
         <div style={s.secH}><div style={s.secL} /><span style={s.secT}>Payment</span><div style={s.secL} /></div>
-        <p style={s.payH}>Transfer <strong style={{ color: C.gold }}>{f.quantity * 700} Birr</strong> to one of the accounts below, then upload your confirmation screenshot.</p>
+        <p style={s.payH}>Transfer <strong style={{ color: C.gold }}>{f.quantity * 600} Birr</strong> to one of the accounts below, then upload your confirmation screenshot.</p>
 
         <div style={{ ...s.payO, ...(f.paymentMethod === "cbe" ? s.payOA : {}) }} onClick={() => setF({ ...f, paymentMethod: "cbe" })}>
-          <div style={s.payOL}><div style={{ ...s.radio, ...(f.paymentMethod === "cbe" ? s.radioA : {}) }}>{f.paymentMethod === "cbe" && <div style={s.radioD} />}</div><div><div style={s.payN}>Commercial Bank of Ethiopia</div><div style={s.payAc}>Account: XXXX XXXX XXXX</div><div style={s.payHo}>Name: — (to be updated)</div></div></div><span style={s.payI}>🏦</span>
+          <div style={s.payOL}><div style={{ ...s.radio, ...(f.paymentMethod === "cbe" ? s.radioA : {}) }}>{f.paymentMethod === "cbe" && <div style={s.radioD} />}</div><div><div style={s.payN}>Commercial Bank of Ethiopia</div><div style={s.payAc}>Account: 1000763127668</div><div style={s.payHo}>Name: Nehimia Bahiru Hunde</div></div></div><span style={s.payI}>🏦</span>
         </div>
         <div style={{ ...s.payO, ...(f.paymentMethod === "telebirr" ? s.payOA : {}) }} onClick={() => setF({ ...f, paymentMethod: "telebirr" })}>
-          <div style={s.payOL}><div style={{ ...s.radio, ...(f.paymentMethod === "telebirr" ? s.radioA : {}) }}>{f.paymentMethod === "telebirr" && <div style={s.radioD} />}</div><div><div style={s.payN}>Telebirr</div><div style={s.payAc}>Phone: XXXX XXX XXXX</div><div style={s.payHo}>Name: — (to be updated)</div></div></div><span style={s.payI}>📱</span>
+          <div style={s.payOL}><div style={{ ...s.radio, ...(f.paymentMethod === "telebirr" ? s.radioA : {}) }}>{f.paymentMethod === "telebirr" && <div style={s.radioD} />}</div><div><div style={s.payN}>Telebirr</div><div style={s.payAc}>Phone: +251 967 0501 88</div><div style={s.payHo}>Name: Selam</div></div></div><span style={s.payI}>📱</span>
         </div>
 
         <div style={s.secH}><div style={s.secL} /><span style={s.secT}>Proof of Payment</span><div style={s.secL} /></div>
@@ -159,26 +182,54 @@ function Buy({ go, add, notify, data }) {
         ) : (
           <div style={s.upDone}><img src={f.paymentScreenshot} alt="proof" style={s.upImg} /><div style={{ flex: 1 }}><div style={s.upName}>{f.screenshotName}</div><button style={s.upRm} onClick={() => { setF({ ...f, paymentScreenshot: null, screenshotName: "" }); if (ref.current) ref.current.value = ""; }}>Remove</button></div></div>
         )}
-        <button style={{ ...s.btn1, width: "100%", marginTop: 8 }} onClick={submit} className="bh">Submit & Reserve Ticket</button>
+        <button style={{ ...s.btn1, width: "100%", marginTop: 8, opacity: uploading ? 0.7 : 1 }} onClick={submit} disabled={uploading} className="bh">{uploading ? "Submitting..." : "Submit & Reserve Ticket"}</button>
       </div>
     </div>
   );
 }
 
-function MyTicket({ go, data, notify }) {
+function MyTicket({ go, notify }) {
   const [q, setQ] = useState("");
   const [tks, setTks] = useState([]);
-  const find = () => {
-    const v = q.trim().toLowerCase();
+  const [searching, setSearching] = useState(false);
+
+  const find = async () => {
+    const v = q.trim();
     if (!v) return notify("Please enter a name, phone, or ticket code", "error");
-    const results = data.tickets.filter(t => t.phone.includes(v) || t.name.toLowerCase().includes(v) || genCode(t.id).toLowerCase().includes(v));
-    results.length > 0 ? setTks(results) : notify("No ticket found", "error");
+    setSearching(true);
+    try {
+      // Try to extract ticket id from a code like LBW-XXXX-{id}
+      const codeMatch = v.match(/^LBW-[A-Z0-9]+-(\d+)$/i);
+      const idGuess = codeMatch ? Number(codeMatch[1]) : Number.isFinite(Number(v)) ? Number(v) : null;
+
+      let query = supabase.from("tickets").select("*").order("id", { ascending: true });
+
+      if (idGuess) {
+        query = query.eq("id", idGuess);
+      } else {
+        // Search by phone or name (case-insensitive)
+        query = query.or(`phone.ilike.%${v}%,name.ilike.%${v}%`);
+      }
+
+      const { data: results, error } = await query;
+      if (error) throw error;
+      if (!results || results.length === 0) {
+        notify("No ticket found", "error");
+        return;
+      }
+      setTks(results);
+    } catch (err) {
+      console.error("[v0] MyTicket search error", err);
+      notify("Search failed. Please try again.", "error");
+    } finally {
+      setSearching(false);
+    }
   };
 
   return (
     <div style={s.pg}><Nav go={go} title="My Ticket" />
       <div style={s.card}>
-        {tks.length === 0 ? (<><h2 style={s.cH}>Find Your Ticket</h2><p style={s.cS}>Search by name, phone, or ticket code</p><Fld label=""><input style={s.inp} placeholder="Name, phone, or code..." value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === "Enter" && find()} /></Fld><button style={{ ...s.btn1, width: "100%" }} onClick={find} className="bh">Search</button></>) : (
+        {tks.length === 0 ? (<><h2 style={s.cH}>Find Your Ticket</h2><p style={s.cS}>Search by name, phone, or ticket code</p><Fld label=""><input style={s.inp} placeholder="Name, phone, or code..." value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === "Enter" && find()} /></Fld><button style={{ ...s.btn1, width: "100%", opacity: searching ? 0.7 : 1 }} onClick={find} disabled={searching} className="bh">{searching ? "Searching..." : "Search"}</button></>) : (
           <div id="printable-ticket">
             {tks.length > 1 && <p style={{ textAlign: "center", fontSize: 13, color: C.txM, marginBottom: 16 }}>{tks.length} tickets found</p>}
             {tks.map((tk, i) => {
@@ -205,61 +256,39 @@ function MyTicket({ go, data, notify }) {
   );
 }
 
-function Admin({ go, data, confirm, auth, setAuth, notify }) {
-  const [pin, setPin] = useState("");
-  const [fl, setFl] = useState("all");
-  const PIN = "9211";
-  if (!auth) return (
-    <div style={s.pg}><Nav go={go} title="Admin" /><div style={s.card}>
-      <div style={{ fontSize: 40, textAlign: "center", marginBottom: 12 }}>🔒</div>
-      <h2 style={s.cH}>Admin Access</h2><p style={s.cS}>Enter PIN to continue</p>
-      <Fld label=""><input style={{ ...s.inp, textAlign: "center", letterSpacing: 10, fontSize: 22, fontWeight: 700 }} placeholder="• • • •" type="password" maxLength={4} value={pin} onChange={e => setPin(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { pin === PIN ? setAuth(true) : notify("Incorrect PIN", "error"); }}} /></Fld>
-      <button style={{ ...s.btn1, width: "100%" }} onClick={() => { pin === PIN ? setAuth(true) : notify("Incorrect PIN", "error"); }}>Enter</button>
-      <p style={{ fontSize: 11, color: C.txD, textAlign: "center", marginTop: 10 }}>Default PIN: 2026</p>
-    </div></div>
-  );
-
-  const tks = data.tickets, conf = tks.filter(t => t.status === "confirmed"), pend = tks.filter(t => t.status === "pending"), scnd = tks.filter(t => t.scannedAt);
-  const rev = conf.reduce((a, t) => a + t.totalAmount, 0), qty = tks.reduce((a, t) => a + t.quantity, 0);
-  const list = fl === "all" ? tks : fl === "confirmed" ? conf : fl === "pending" ? pend : scnd;
-
-  return (
-    <div style={s.pg}><Nav go={go} title="Dashboard" />
-      <div style={s.statsR}><Stat value={qty} label="Tickets" /><Stat value={conf.length} label="Confirmed" color={C.grn} /><Stat value={pend.length} label="Pending" color={C.yel} /><Stat value={rev.toLocaleString()} label="Birr" color={C.gold} /></div>
-      <div style={s.flR}>{["all", "confirmed", "pending", "scanned"].map(f => <button key={f} style={{ ...s.flB, ...(fl === f ? s.flA : {}) }} onClick={() => setFl(f)}>{f.charAt(0).toUpperCase() + f.slice(1)}</button>)}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {list.length === 0 ? <div style={{ textAlign: "center", padding: 40, color: C.txD }}>No tickets yet</div> : list.slice().reverse().map(t => (
-          <div key={t.id} style={s.aCard}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-              <div><div style={{ fontWeight: 700, fontSize: 15, color: C.tx }}>{t.name}</div><div style={{ fontSize: 12, fontFamily: "monospace", color: C.gold, marginTop: 2 }}>{genCode(t.id)}</div></div>
-              <span style={{ ...s.badge, ...(t.status === "confirmed" ? s.bGrn : s.bYel) }}>{t.status}</span>
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 13, color: C.txM, marginBottom: 8 }}>
-              <span>📱 {t.phone}</span>
-              <span>🎟 {t.groupTotal > 1 ? `${t.ticketIndex}/${t.groupTotal}` : "×1"}</span>
-              <span>💰 {t.groupTotal > 1 ? `${t.groupTotal * 700} Birr total` : `${t.totalAmount} Birr`}</span>
-              {t.paymentMethod && <span>💳 {t.paymentMethod === "cbe" ? "CBE" : "Telebirr"}</span>}
-              {t.scannedAt && <span>✅ Scanned</span>}
-            </div>
-            {t.paymentScreenshot && <div style={{ marginBottom: 10 }}><div style={{ fontSize: 11, color: C.txD, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Payment Proof</div><img src={t.paymentScreenshot} alt="proof" style={{ width: "100%", maxHeight: 180, objectFit: "contain", borderRadius: 8, border: `1px solid ${C.bd}`, background: C.bg }} /></div>}
-            {t.status === "pending" && <button style={s.confB} onClick={() => { confirm(t.id, t.groupId); notify(`Confirmed: ${t.name}${t.groupTotal > 1 ? ` (${t.groupTotal} tickets)` : ""}`); }}>Confirm Payment ✓{t.groupTotal > 1 ? ` (${t.groupTotal} tickets)` : ""}</button>}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function Scan({ go, validate, notify }) {
+function Scan({ go, notify }) {
   const [inp, setInp] = useState("");
   const [res, setRes] = useState(null);
-  const scan = () => { if (!inp.trim()) return; const r = validate(inp.trim()); setRes(r); if (r.ok) notify("Entry approved!"); };
+  const [scanning, setScanning] = useState(false);
+
+  const scan = async () => {
+    const code = inp.trim();
+    if (!code) return;
+    setScanning(true);
+    try {
+      const r = await fetch("/api/tickets/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await r.json();
+      const result = { ok: !!data.ok, msg: data.msg, tk: data.ticket || null };
+      setRes(result);
+      if (result.ok) notify("Entry approved!");
+    } catch (err) {
+      console.error("[v0] Scan error", err);
+      setRes({ ok: false, msg: "Network error", tk: null });
+    } finally {
+      setScanning(false);
+    }
+  };
+
   return (
     <div style={s.pg}><Nav go={go} title="Gate Scanner" /><div style={s.card}>
       <div style={{ fontSize: 40, textAlign: "center", marginBottom: 8 }}>📷</div>
       <h2 style={s.cH}>Validate Ticket</h2><p style={s.cS}>Enter ticket code to verify entry</p>
       <Fld label=""><input style={{ ...s.inp, textAlign: "center", fontSize: 17, fontWeight: 600, letterSpacing: 2, fontFamily: "monospace" }} placeholder="LBW-XXXXXX-XXXX" value={inp} onChange={e => setInp(e.target.value.toUpperCase())} onKeyDown={e => e.key === "Enter" && scan()} /></Fld>
-      <button style={{ ...s.btn1, width: "100%" }} onClick={scan} className="bh">Validate</button>
+      <button style={{ ...s.btn1, width: "100%", opacity: scanning ? 0.7 : 1 }} onClick={scan} disabled={scanning} className="bh">{scanning ? "Validating..." : "Validate"}</button>
       {res && <div style={{ ...s.scanB, borderColor: res.ok ? C.grn : C.red, background: res.ok ? C.grnD : C.redD }}>
         <div style={{ fontSize: 40, color: res.ok ? C.grn : C.red }}>{res.ok ? "✓" : "✗"}</div>
         <div style={{ fontSize: 16, fontWeight: 700, color: C.tx }}>{res.msg}</div>
@@ -283,6 +312,7 @@ const s = {
   hContent: { position: "relative", zIndex: 2, display: "flex", flexDirection: "column", alignItems: "center", gap: 20, animation: "fadeIn 0.8s ease" },
   hBadge: { fontSize: 9, fontWeight: 700, letterSpacing: 4, color: C.gold, textTransform: "uppercase", padding: "6px 16px", border: `1px solid ${C.gold}35`, borderRadius: 3 },
   hTitle: { fontFamily: "'Cormorant Garamond', serif", fontSize: 56, fontWeight: 700, color: C.wh, letterSpacing: 14, lineHeight: 1 },
+  hSubtitle: { fontFamily: "'Inter', sans-serif", fontSize: 12, color: C.gold, letterSpacing: 2, fontWeight: 500, marginTop: -8, marginBottom: 8 },
   hDiv: { display: "flex", alignItems: "center", gap: 12, width: 200 },
   hDivLine: { flex: 1, height: 1, background: `linear-gradient(90deg, transparent, ${C.gold}, transparent)` },
   hDivDia: { color: C.gold, fontSize: 8 },
