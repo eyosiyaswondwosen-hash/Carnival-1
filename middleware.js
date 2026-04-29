@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 
 const ADMIN_COOKIE_NAME = 'lebawi_admin_session'
 
-export function proxy(request) {
+export function middleware(request) {
+  // Protect admin routes, allow login page and API routes through
   const { pathname } = request.nextUrl
 
   // Only gate the dashboard page itself; login page must remain accessible.
