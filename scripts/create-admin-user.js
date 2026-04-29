@@ -1,25 +1,23 @@
-import pkg from 'postgres';
+import postgres from 'postgres';
 import bcrypt from 'bcryptjs';
 
-const { sql } = pkg;
-
-const connectionString = process.env.DATABASE_URL;
+const connectionString = process.env.POSTGRES_URL;
 
 if (!connectionString) {
-  console.error('[v0] DATABASE_URL not set');
+  console.error('[v0] POSTGRES_URL not set');
   process.exit(1);
 }
 
 async function createAdminUser() {
-  const db = pkg.default(connectionString);
+  const db = postgres(connectionString);
 
   try {
     console.log('[v0] Generating new admin password...');
     
-    // Generate a random 6-character alphanumeric password
-    const passwordChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    // Generate a random 12-character alphanumeric password with special chars
+    const passwordChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%';
     let newPassword = '';
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 12; i++) {
       newPassword += passwordChars.charAt(Math.floor(Math.random() * passwordChars.length));
     }
 
@@ -31,8 +29,7 @@ async function createAdminUser() {
       INSERT INTO admin_users (username, password_hash)
       VALUES ('admin', ${hashedPassword})
       ON CONFLICT (username) DO UPDATE
-      SET password_hash = ${hashedPassword},
-          updated_at = now()
+      SET password_hash = ${hashedPassword}
       RETURNING id, username, created_at
     `;
 
