@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from "react";
-import { supabase } from "./lib/supabase.js";
-import { getAdminPassword, setAdminPassword, clearAdminPasswordCache } from "./lib/adminConfig.js";
+import { useState, useRef } from "react";
+import { createClient as createSupabaseClient } from "./lib/supabase/client.js";
+
+const supabase = createSupabaseClient();
 
 function generateQRCodeSVG(text, size = 160) {
   const hash = (str) => { let h = 0; for (let i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; } return Math.abs(h); };
@@ -21,95 +22,11 @@ const C = { bg: "#0A0712", sf: "#130F1F", card: "#1A1528", bd: "#2A2240", bdL: "
 
 export default function App() {
   const [pg, setPg] = useState("home");
-  const [data, setData] = useState({ tickets: [], nextId: 1001 });
-  const [auth, setAuth] = useState(false);
   const [notif, setNotif] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [adminPassword, setAdminPassword] = useState(null);
 
-  useEffect(() => {
-    console.log('[v0] App mounted, initializing data');
-    initializeApp();
-  }, []);
-
-  const initializeApp = async () => {
-    try {
-      console.log('[v0] Initializing app');
-      await loadTicketsFromSupabase();
-      const password = await getAdminPassword();
-      console.log('[v0] Admin password loaded:', password ? 'success' : 'failed');
-      setAdminPassword(password);
-    } catch (error) {
-      console.error('[v0] Error initializing app:', error);
-    }
-  };
-
-  const loadTicketsFromSupabase = async () => {
-    try {
-      console.log('[v0] Loading tickets from Supabase');
-      const { data: tickets, error } = await supabase
-        .from('tickets')
-        .select('*')
-        .order('id', { ascending: false });
-      
-      if (error) throw error;
-      console.log('[v0] Tickets loaded:', tickets?.length || 0);
-      setData({ tickets: tickets || [], nextId: Math.max(...(tickets?.map(t => t.id) || [0])) + 1 });
-    } catch (error) {
-      console.error('[v0] Error loading tickets:', error);
-      setData({ tickets: [], nextId: 1001 });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const notify = (m, t = "success") => { setNotif({ m, t }); setTimeout(() => setNotif(null), 3500); };
-  
-  const addTickets = async (tks) => {
-    try {
-      const { error } = await supabase.from('tickets').insert(tks);
-      if (error) throw error;
-      await loadTicketsFromSupabase();
-    } catch (error) {
-      console.error('Error adding tickets:', error);
-      notify('Error saving tickets', 'error');
-    }
-  };
-
-  const confirmPay = async (id, groupId) => {
-    try {
-      const updateData = { status: 'confirmed' };
-      const query = groupId 
-        ? supabase.from('tickets').update(updateData).eq('group_id', groupId)
-        : supabase.from('tickets').update(updateData).eq('id', id);
-      
-      const { error } = await query;
-      if (error) throw error;
-      await loadTicketsFromSupabase();
-    } catch (error) {
-      console.error('Error confirming payment:', error);
-    }
-  };
-
-  const validate = async (code) => {
-    try {
-      const tk = data.tickets.find(t => genCode(t.id) === code || t.id.toString() === code);
-      if (!tk) return { ok: false, msg: "Ticket not found" };
-      if (tk.status === "pending") return { ok: false, msg: "Payment not confirmed yet", tk };
-      if (tk.scanned_at) return { ok: false, msg: `Already scanned at ${new Date(tk.scanned_at).toLocaleTimeString()}`, tk };
-      
-      const { error } = await supabase
-        .from('tickets')
-        .update({ scanned_at: new Date().toISOString() })
-        .eq('id', tk.id);
-      
-      if (error) throw error;
-      await loadTicketsFromSupabase();
-      return { ok: true, msg: "Entry approved!", tk };
-    } catch (error) {
-      console.error('Error validating ticket:', error);
-      return { ok: false, msg: "Error scanning ticket", tk: null };
-    }
+  const notify = (m, t = "success") => {
+    setNotif({ m, t });
+    setTimeout(() => setNotif(null), 3500);
   };
 
   return (
@@ -118,10 +35,9 @@ export default function App() {
       <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
       {notif && <div style={{ ...s.notif, background: notif.t === "success" ? C.grn : C.red, color: C.bg }}>{notif.m}</div>}
       {pg === "home" && <Home go={setPg} />}
-      {pg === "buy" && <Buy go={setPg} add={addTickets} notify={notify} data={data} />}
-      {pg === "admin" && <Admin go={setPg} data={data} confirm={confirmPay} auth={auth} setAuth={setAuth} notify={notify} adminPassword={adminPassword} />}
-      {pg === "scan" && <Scan go={setPg} validate={validate} notify={notify} />}
-      {pg === "myticket" && <MyTicket go={setPg} data={data} notify={notify} />}
+      {pg === "buy" && <Buy go={setPg} notify={notify} />}
+      {pg === "scan" && <Scan go={setPg} notify={notify} />}
+      {pg === "myticket" && <MyTicket go={setPg} notify={notify} />}
     </div>
   );
 }
@@ -144,7 +60,7 @@ function Home({ go }) {
           <button style={s.btn2} onClick={() => go("myticket")} className="bh">View My Ticket</button>
         </div>
         <div style={s.hLinks}>
-          <button style={s.fLink} onClick={() => go("admin")}>Admin Dashboard</button>
+          <a href="/admin" style={{ ...s.fLink, textDecoration: "none" }}>Admin Dashboard</a>
           <span style={{ color: C.bdL }}>|</span>
           <button style={s.fLink} onClick={() => go("myticket")}>View My Ticket</button>
           <span style={{ color: C.bdL }}>|</span>
@@ -168,45 +84,49 @@ function Stat({ value, label, color }) {
   return <div style={s.stat}><div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'Cormorant Garamond', serif", color: color || C.tx }}>{value}</div><div style={{ fontSize: 10, color: C.txM, marginTop: 2, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div></div>;
 }
 
-function Buy({ go, add, notify, data }) {
+function Buy({ go, notify }) {
   const [f, setF] = useState({ name: "", phone: "", email: "", quantity: 1, paymentMethod: "", paymentScreenshot: null, screenshotName: "" });
   const [done, setDone] = useState(null);
   const [uploading, setUploading] = useState(false);
   const ref = useRef(null);
 
-  const TICKET_CAP = 1000;
-  const soldTickets = data.tickets.filter(t => t.status === 'confirmed').length;
-
   const submit = async () => {
     if (!f.name.trim() || !f.phone.trim()) return notify("Please fill in name and phone", "error");
     if (!f.paymentMethod) return notify("Select a payment method", "error");
     if (!f.paymentScreenshot) return notify("Upload payment screenshot", "error");
-    if (soldTickets + f.quantity > TICKET_CAP) return notify(soldTickets >= TICKET_CAP ? "Sorry, tickets are sold out!" : `Only ${TICKET_CAP - soldTickets} tickets remaining`, "error");
-    
+
     setUploading(true);
     try {
-      const groupId = `g-${Date.now()}`;
-      const base = { 
-        name: f.name, 
-        phone: f.phone, 
-        email: f.email, 
-        payment_method: f.paymentMethod, 
-        payment_screenshot: f.paymentScreenshot, 
-        screenshot_name: f.screenshotName, 
-        status: "pending", 
-        created_at: new Date().toISOString(), 
-        group_id: groupId, 
-        group_total: f.quantity, 
-        quantity: 1, 
-        total_amount: 600 
-      };
-      const newTickets = Array.from({ length: f.quantity }, (_, i) => ({ ...base, ticket_index: i + 1 }));
-      await add(newTickets);
-      setDone(newTickets.map((tk, idx) => ({ ...tk, id: data.nextId + idx, code: genCode(data.nextId + idx) })));
+      const res = await fetch("/api/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: f.name,
+          phone: f.phone,
+          email: f.email,
+          quantity: f.quantity,
+          paymentMethod: f.paymentMethod,
+          paymentScreenshot: f.paymentScreenshot,
+          screenshotName: f.screenshotName,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        notify(data.error || "Failed to reserve tickets", "error");
+        return;
+      }
+      const tickets = data.tickets || [];
+      setDone(
+        tickets.map((tk) => ({
+          ...tk,
+          paymentMethod: tk.payment_method,
+          code: genCode(tk.id),
+        }))
+      );
       notify("Ticket reserved! Awaiting verification.");
-    } catch (error) {
-      notify('Error creating tickets', 'error');
-      console.error(error);
+    } catch (err) {
+      console.error("[v0] Buy error", err);
+      notify("Network error. Please try again.", "error");
     } finally {
       setUploading(false);
     }
@@ -262,26 +182,54 @@ function Buy({ go, add, notify, data }) {
         ) : (
           <div style={s.upDone}><img src={f.paymentScreenshot} alt="proof" style={s.upImg} /><div style={{ flex: 1 }}><div style={s.upName}>{f.screenshotName}</div><button style={s.upRm} onClick={() => { setF({ ...f, paymentScreenshot: null, screenshotName: "" }); if (ref.current) ref.current.value = ""; }}>Remove</button></div></div>
         )}
-        <button style={{ ...s.btn1, width: "100%", marginTop: 8 }} onClick={submit} className="bh">Submit & Reserve Ticket</button>
+        <button style={{ ...s.btn1, width: "100%", marginTop: 8, opacity: uploading ? 0.7 : 1 }} onClick={submit} disabled={uploading} className="bh">{uploading ? "Submitting..." : "Submit & Reserve Ticket"}</button>
       </div>
     </div>
   );
 }
 
-function MyTicket({ go, data, notify }) {
+function MyTicket({ go, notify }) {
   const [q, setQ] = useState("");
   const [tks, setTks] = useState([]);
-  const find = () => {
-    const v = q.trim().toLowerCase();
+  const [searching, setSearching] = useState(false);
+
+  const find = async () => {
+    const v = q.trim();
     if (!v) return notify("Please enter a name, phone, or ticket code", "error");
-    const results = data.tickets.filter(t => t.phone.includes(v) || t.name.toLowerCase().includes(v) || genCode(t.id).toLowerCase().includes(v));
-    results.length > 0 ? setTks(results) : notify("No ticket found", "error");
+    setSearching(true);
+    try {
+      // Try to extract ticket id from a code like LBW-XXXX-{id}
+      const codeMatch = v.match(/^LBW-[A-Z0-9]+-(\d+)$/i);
+      const idGuess = codeMatch ? Number(codeMatch[1]) : Number.isFinite(Number(v)) ? Number(v) : null;
+
+      let query = supabase.from("tickets").select("*").order("id", { ascending: true });
+
+      if (idGuess) {
+        query = query.eq("id", idGuess);
+      } else {
+        // Search by phone or name (case-insensitive)
+        query = query.or(`phone.ilike.%${v}%,name.ilike.%${v}%`);
+      }
+
+      const { data: results, error } = await query;
+      if (error) throw error;
+      if (!results || results.length === 0) {
+        notify("No ticket found", "error");
+        return;
+      }
+      setTks(results);
+    } catch (err) {
+      console.error("[v0] MyTicket search error", err);
+      notify("Search failed. Please try again.", "error");
+    } finally {
+      setSearching(false);
+    }
   };
 
   return (
     <div style={s.pg}><Nav go={go} title="My Ticket" />
       <div style={s.card}>
-        {tks.length === 0 ? (<><h2 style={s.cH}>Find Your Ticket</h2><p style={s.cS}>Search by name, phone, or ticket code</p><Fld label=""><input style={s.inp} placeholder="Name, phone, or code..." value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === "Enter" && find()} /></Fld><button style={{ ...s.btn1, width: "100%" }} onClick={find} className="bh">Search</button></>) : (
+        {tks.length === 0 ? (<><h2 style={s.cH}>Find Your Ticket</h2><p style={s.cS}>Search by name, phone, or ticket code</p><Fld label=""><input style={s.inp} placeholder="Name, phone, or code..." value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === "Enter" && find()} /></Fld><button style={{ ...s.btn1, width: "100%", opacity: searching ? 0.7 : 1 }} onClick={find} disabled={searching} className="bh">{searching ? "Searching..." : "Search"}</button></>) : (
           <div id="printable-ticket">
             {tks.length > 1 && <p style={{ textAlign: "center", fontSize: 13, color: C.txM, marginBottom: 16 }}>{tks.length} tickets found</p>}
             {tks.map((tk, i) => {
@@ -308,76 +256,39 @@ function MyTicket({ go, data, notify }) {
   );
 }
 
-function Admin({ go, data, confirm, auth, setAuth, notify, adminPassword }) {
-  const [psw, setPsw] = useState("");
-  const [fl, setFl] = useState("all");
+function Scan({ go, notify }) {
+  const [inp, setInp] = useState("");
+  const [res, setRes] = useState(null);
+  const [scanning, setScanning] = useState(false);
 
-  const tks = data.tickets, conf = tks.filter(t => t.status === "confirmed"), pend = tks.filter(t => t.status === "pending"), scnd = tks.filter(t => t.scanned_at);
-  const rev = conf.reduce((a, t) => a + (t.group_total > 1 ? t.group_total * 600 : t.total_amount), 0), qty = tks.reduce((a, t) => a + t.quantity, 0);
-  const list = fl === "all" ? tks : fl === "confirmed" ? conf : fl === "pending" ? pend : scnd;
-
-  const checkAuth = () => {
-    console.log('[v0] Checking admin password');
-    const correctPassword = adminPassword || "9134";
-    if (psw === correctPassword) {
-      console.log('[v0] Admin password correct');
-      setAuth(true);
-      setPsw("");
-      notify("Access granted!");
-    } else {
-      console.log('[v0] Admin password incorrect');
-      notify("Incorrect password", "error");
+  const scan = async () => {
+    const code = inp.trim();
+    if (!code) return;
+    setScanning(true);
+    try {
+      const r = await fetch("/api/tickets/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await r.json();
+      const result = { ok: !!data.ok, msg: data.msg, tk: data.ticket || null };
+      setRes(result);
+      if (result.ok) notify("Entry approved!");
+    } catch (err) {
+      console.error("[v0] Scan error", err);
+      setRes({ ok: false, msg: "Network error", tk: null });
+    } finally {
+      setScanning(false);
     }
   };
 
-  if (!auth) return (
-    <div style={s.pg}><Nav go={go} title="Admin Dashboard" />
-      <div style={s.card}>
-        <h2 style={s.cH}>Admin Access Required</h2>
-        <p style={s.cS}>Enter the admin password to continue.</p>
-        <input style={s.inp} type="password" placeholder="Enter password" value={psw} onChange={e => setPsw(e.target.value)} onKeyDown={e => e.key === "Enter" && checkAuth()} />
-        <button style={{ ...s.btn1, width: "100%", marginTop: 12 }} onClick={checkAuth} className="bh">Login</button>
-      </div>
-    </div>
-  );
-
-  return (
-    <div style={s.pg}><Nav go={go} title="Dashboard" />
-      <div style={s.statsR}><Stat value={qty} label="Tickets" /><Stat value={conf.length} label="Confirmed" color={C.grn} /><Stat value={pend.length} label="Pending" color={C.yel} /><Stat value={rev.toLocaleString()} label="Birr" color={C.gold} /></div>
-      <div style={s.flR}>{["all", "confirmed", "pending", "scanned"].map(f => <button key={f} style={{ ...s.flB, ...(fl === f ? s.flA : {}) }} onClick={() => setFl(f)}>{f.charAt(0).toUpperCase() + f.slice(1)}</button>)}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {list.length === 0 ? <div style={{ textAlign: "center", padding: 40, color: C.txD }}>No tickets yet</div> : list.slice().reverse().map(t => (
-          <div key={t.id} style={s.aCard}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-              <div><div style={{ fontWeight: 700, fontSize: 15, color: C.tx }}>{t.name}</div><div style={{ fontSize: 12, fontFamily: "monospace", color: C.gold, marginTop: 2 }}>{genCode(t.id)}</div></div>
-              <span style={{ ...s.badge, ...(t.status === "confirmed" ? s.bGrn : s.bYel) }}>{t.status}</span>
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 13, color: C.txM, marginBottom: 8 }}>
-              <span>📱 {t.phone}</span>
-              <span>🎟 {t.group_total > 1 ? `${t.ticket_index}/${t.group_total}` : "×1"}</span>
-              <span>💰 {t.group_total > 1 ? `${t.group_total * 600} Birr total` : `${t.total_amount} Birr`}</span>
-              {t.payment_method && <span>💳 {t.payment_method === "cbe" ? "CBE" : "Telebirr"}</span>}
-              {t.scanned_at && <span>✅ Scanned</span>}
-            </div>
-            {t.payment_screenshot && <div style={{ marginBottom: 10 }}><div style={{ fontSize: 11, color: C.txD, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Payment Proof</div><img src={t.payment_screenshot} alt="proof" style={{ width: "100%", maxHeight: 180, objectFit: "contain", borderRadius: 8, border: `1px solid ${C.bd}`, background: C.bg }} /></div>}
-            {t.status === "pending" && <button style={s.confB} onClick={() => { confirm(t.id, t.group_id); notify(`Confirmed: ${t.name}${t.group_total > 1 ? ` (${t.group_total} tickets)` : ""}`); }}>Confirm Payment ✓{t.group_total > 1 ? ` (${t.group_total} tickets)` : ""}</button>}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function Scan({ go, validate, notify }) {
-  const [inp, setInp] = useState("");
-  const [res, setRes] = useState(null);
-  const scan = () => { if (!inp.trim()) return; const r = validate(inp.trim()); setRes(r); if (r.ok) notify("Entry approved!"); };
   return (
     <div style={s.pg}><Nav go={go} title="Gate Scanner" /><div style={s.card}>
       <div style={{ fontSize: 40, textAlign: "center", marginBottom: 8 }}>📷</div>
       <h2 style={s.cH}>Validate Ticket</h2><p style={s.cS}>Enter ticket code to verify entry</p>
       <Fld label=""><input style={{ ...s.inp, textAlign: "center", fontSize: 17, fontWeight: 600, letterSpacing: 2, fontFamily: "monospace" }} placeholder="LBW-XXXXXX-XXXX" value={inp} onChange={e => setInp(e.target.value.toUpperCase())} onKeyDown={e => e.key === "Enter" && scan()} /></Fld>
-      <button style={{ ...s.btn1, width: "100%" }} onClick={scan} className="bh">Validate</button>
+      <button style={{ ...s.btn1, width: "100%", opacity: scanning ? 0.7 : 1 }} onClick={scan} disabled={scanning} className="bh">{scanning ? "Validating..." : "Validate"}</button>
       {res && <div style={{ ...s.scanB, borderColor: res.ok ? C.grn : C.red, background: res.ok ? C.grnD : C.redD }}>
         <div style={{ fontSize: 40, color: res.ok ? C.grn : C.red }}>{res.ok ? "✓" : "✗"}</div>
         <div style={{ fontSize: 16, fontWeight: 700, color: C.tx }}>{res.msg}</div>
