@@ -24,14 +24,19 @@ export async function POST(_request, { params }) {
     return NextResponse.json({ error: 'Ticket not found' }, { status: 404 })
   }
 
-  const query = target.group_id
-    ? supabase.from('tickets').delete().eq('group_id', target.group_id)
-    : supabase.from('tickets').delete().eq('id', id)
+  const updatePayload = {
+    status: 'rejected',
+    rejected_at: new Date().toISOString(),
+  }
 
-  const { error } = await query
+  const query = target.group_id
+    ? supabase.from('tickets').update(updatePayload).eq('group_id', target.group_id).select()
+    : supabase.from('tickets').update(updatePayload).eq('id', id).select()
+
+  const { data, error } = await query
   if (error) {
     return NextResponse.json({ error: 'Rejection failed' }, { status: 500 })
   }
 
-  return NextResponse.json({ success: true })
+  return NextResponse.json({ success: true, updated: data?.length || 0 })
 }
