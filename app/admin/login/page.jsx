@@ -1,7 +1,7 @@
 'use client'
 
 import { Suspense, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { C } from '../theme'
 
 export default function AdminLoginPage() {
@@ -14,10 +14,6 @@ export default function AdminLoginPage() {
 
 function LoginForm() {
   const router = useRouter()
-  const searchParams = useSearchParams()
-  const redirect = searchParams.get('redirect') || '/admin'
-
-  const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -30,15 +26,15 @@ function LoginForm() {
       const res = await fetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ password }),
       })
       const data = await res.json()
       if (!res.ok) {
-        setError(data.error || 'Login failed')
+        setError(data.error || 'Incorrect password')
         setLoading(false)
         return
       }
-      router.replace(redirect)
+      router.replace('/admin')
       router.refresh()
     } catch {
       setError('Network error. Please try again.')
@@ -51,21 +47,9 @@ function LoginForm() {
       <div style={s.card}>
         <div style={s.badge}>LEBAWI INTERNATIONAL ACADEMY</div>
         <h1 style={s.title}>Admin Access</h1>
-        <p style={s.subtitle}>Sign in to manage carnival ticket approvals</p>
+        <p style={s.subtitle}>Enter the admin password to continue</p>
 
         <form onSubmit={handleSubmit} style={s.form}>
-          <label style={s.label}>
-            <span style={s.labelText}>Username</span>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
-              style={s.input}
-              required
-            />
-          </label>
-
           <label style={s.label}>
             <span style={s.labelText}>Password</span>
             <input
@@ -73,14 +57,16 @@ function LoginForm() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
+              placeholder="Enter password"
               style={s.input}
+              autoFocus
               required
             />
           </label>
 
           {error && <div style={s.error}>{error}</div>}
 
-          <button type="submit" disabled={loading} style={s.button}>
+          <button type="submit" disabled={loading} style={{ ...s.button, opacity: loading ? 0.7 : 1 }}>
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
