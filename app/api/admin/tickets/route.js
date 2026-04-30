@@ -23,6 +23,7 @@ export async function GET(request) {
 
   if (filter === 'pending') query = query.eq('status', 'pending')
   if (filter === 'confirmed') query = query.eq('status', 'confirmed')
+  if (filter === 'rejected') query = query.eq('status', 'rejected')
   if (filter === 'scanned') query = query.not('scanned_at', 'is', null)
 
   const { data, error } = await query
