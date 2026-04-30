@@ -2,13 +2,20 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 
 export const runtime = 'nodejs'
+export const maxDuration = 15
 
 const TICKET_PRICE = 600
 const TICKET_CAP = 1000
 
 export async function POST(request) {
   try {
-    const body = await request.json()
+    let body
+    try {
+      body = await request.json()
+    } catch {
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+    }
+
     const {
       name,
       phone,
@@ -41,11 +48,16 @@ export async function POST(request) {
     const qty = Math.max(1, Math.min(10, Number(quantity) || 1))
     const supabase = createServiceClient()
 
-    // Capacity check
-    const { count: confirmedCount } = await supabase
+    // Use DB count — fast, no row fetch
+    const { count: confirmedCount, error: countErr } = await supabase
       .from('tickets')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'confirmed')
+
+    if (countErr) {
+      console.error('[tickets] Count error:', countErr)
+      return NextResponse.json({ error: 'Failed to check capacity' }, { status: 500 })
+    }
 
     const remaining = TICKET_CAP - (confirmedCount || 0)
     if (qty > remaining) {
@@ -78,19 +90,13 @@ export async function POST(request) {
 
     const { data, error } = await supabase.from('tickets').insert(rows).select()
     if (error) {
-      console.error('[v0] Insert tickets error:', error)
-      return NextResponse.json(
-        { error: 'Failed to save tickets' },
-        { status: 500 }
-      )
+      console.error('[tickets] Insert error:', error)
+      return NextResponse.json({ error: 'Failed to save tickets' }, { status: 500 })
     }
 
     return NextResponse.json({ success: true, tickets: data, groupId })
   } catch (err) {
-    console.error('[v0] Purchase error:', err)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('[tickets] Purchase error:', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
