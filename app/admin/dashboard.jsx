@@ -19,10 +19,12 @@ export default function AdminDashboard({ username }) {
   }
 
   const fetchAll = useCallback(async (currentFilter) => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 12000)
     try {
       const [statsRes, ticketsRes] = await Promise.all([
-        fetch('/api/admin/stats', { cache: 'no-store' }),
-        fetch(`/api/admin/tickets?filter=${currentFilter}`, { cache: 'no-store' }),
+        fetch('/api/admin/stats', { cache: 'no-store', signal: controller.signal }),
+        fetch(`/api/admin/tickets?filter=${currentFilter}`, { cache: 'no-store', signal: controller.signal }),
       ])
 
       if (statsRes.status === 401 || ticketsRes.status === 401) {
@@ -35,9 +37,11 @@ export default function AdminDashboard({ username }) {
       setStats(statsData)
       setTickets(ticketsData.tickets || [])
     } catch (err) {
-      console.error('[v0] Fetch error:', err)
-      showNotif('Failed to load data', 'error')
+      if (err.name !== 'AbortError') {
+        showNotif('Failed to load data. Retrying...', 'error')
+      }
     } finally {
+      clearTimeout(timeout)
       setLoading(false)
     }
   }, [router])

@@ -13,30 +13,47 @@ export async function GET() {
   }
 
   const supabase = createServiceClient()
-  const { data: tickets, error } = await supabase
-    .from('tickets')
-    .select('id, status, total_amount, quantity, scanned_at')
+  const CAPACITY = 1000
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
+  // Use parallel DB count queries instead of fetching all rows
+  const [totalRes, confirmedRes, pendingRes, scannedRes, revenueRes] =
+    await Promise.all([
+      supabase.from('tickets').select('*', { count: 'exact', head: true }),
+      supabase
+        .from('tickets')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'confirmed'),
+      supabase
+        .from('tickets')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'pending'),
+      supabase
+        .from('tickets')
+        .select('*', { count: 'exact', head: true })
+        .not('scanned_at', 'is', null),
+      // Sum revenue from confirmed tickets only
+      supabase
+        .from('tickets')
+        .select('total_amount')
+        .eq('status', 'confirmed'),
+    ])
 
-  const all = tickets || []
-  const confirmed = all.filter((t) => t.status === 'confirmed')
-  const pending = all.filter((t) => t.status === 'pending')
-  const scanned = all.filter((t) => t.scanned_at)
-
-  const totalQuantity = all.reduce((sum, t) => sum + (t.quantity || 1), 0)
-  const revenue = confirmed.reduce((sum, t) => sum + (t.total_amount || 0), 0)
-  const capacity = 1000
+  const total = totalRes.count ?? 0
+  const confirmed = confirmedRes.count ?? 0
+  const pending = pendingRes.count ?? 0
+  const scanned = scannedRes.count ?? 0
+  const revenue = (revenueRes.data ?? []).reduce(
+    (sum, t) => sum + (t.total_amount || 0),
+    0
+  )
 
   return NextResponse.json({
-    totalTickets: totalQuantity,
-    confirmed: confirmed.length,
-    pending: pending.length,
-    scanned: scanned.length,
+    totalTickets: total,
+    confirmed,
+    pending,
+    scanned,
     revenue,
-    capacity,
-    remaining: Math.max(0, capacity - confirmed.length),
+    capacity: CAPACITY,
+    remaining: Math.max(0, CAPACITY - confirmed),
   })
 }
