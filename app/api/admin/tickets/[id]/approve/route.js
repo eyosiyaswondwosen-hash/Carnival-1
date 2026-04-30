@@ -5,8 +5,9 @@ import { createServiceClient } from '@/lib/supabase/server'
 export const runtime = 'nodejs'
 
 export async function POST(_request, { params }) {
+  let session
   try {
-    await requireAdmin()
+    session = await requireAdmin()
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -28,6 +29,7 @@ export async function POST(_request, { params }) {
   const updatePayload = {
     status: 'confirmed',
     approved_at: new Date().toISOString(),
+    approved_by: session.adminId,
   }
 
   const query = target.group_id
