@@ -18,39 +18,47 @@ export default function AdminDashboard({ username }) {
     setTimeout(() => setNotif(null), 3500)
   }
 
-  const fetchAll = useCallback(async (currentFilter) => {
+  const fetchStats = useCallback(async () => {
     try {
-      const [statsRes, ticketsRes] = await Promise.all([
-        fetch('/api/admin/stats', { cache: 'no-store' }),
-        fetch(`/api/admin/tickets?filter=${currentFilter}`, { cache: 'no-store' }),
-      ])
+      const res = await fetch('/api/admin/stats', { cache: 'no-store' })
+      if (res.status === 401) { router.replace('/admin/login'); return }
+      setStats(await res.json())
+    } catch {
+      // non-fatal — stats are supplementary
+    }
+  }, [router])
 
-      if (statsRes.status === 401 || ticketsRes.status === 401) {
-        router.replace('/admin/login')
-        return
-      }
-
-      const statsData = await statsRes.json()
-      const ticketsData = await ticketsRes.json()
-      setStats(statsData)
-      setTickets(ticketsData.tickets || [])
-    } catch (err) {
-      console.error('[v0] Fetch error:', err)
-      showNotif('Failed to load data', 'error')
+  const fetchTickets = useCallback(async (currentFilter) => {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/admin/tickets?filter=${currentFilter}`, { cache: 'no-store' })
+      if (res.status === 401) { router.replace('/admin/login'); return }
+      if (!res.ok) { showNotif('Failed to load tickets', 'error'); return }
+      const data = await res.json()
+      setTickets(data.tickets || [])
+    } catch {
+      showNotif('Network error — check your connection', 'error')
     } finally {
       setLoading(false)
     }
   }, [router])
 
+  // On mount: load stats and tickets in parallel
   useEffect(() => {
-    fetchAll(filter)
-  }, [filter, fetchAll])
+    fetchStats()
+    fetchTickets(filter)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-refresh every 30s for near-real-time stats
+  // When filter changes: only reload tickets, stats stay
   useEffect(() => {
-    const interval = setInterval(() => fetchAll(filter), 30000)
+    fetchTickets(filter)
+  }, [filter, fetchTickets])
+
+  // Auto-refresh stats every 30s; tickets only on manual refresh
+  useEffect(() => {
+    const interval = setInterval(fetchStats, 30000)
     return () => clearInterval(interval)
-  }, [filter, fetchAll])
+  }, [fetchStats])
 
   async function handleApprove(ticketId, name, groupTotal) {
     setActionId(ticketId)
@@ -68,7 +76,8 @@ export default function AdminDashboard({ username }) {
       showNotif(
         `Confirmed: ${name}${groupTotal > 1 ? ` (${groupTotal} tickets)` : ''}`
       )
-      await fetchAll(filter)
+      fetchStats()
+      await fetchTickets(filter)
     } catch {
       showNotif('Network error', 'error')
     } finally {
@@ -77,7 +86,7 @@ export default function AdminDashboard({ username }) {
   }
 
   async function handleReject(ticketId, name) {
-    if (!confirm(`Reject and delete ticket(s) for ${name}?`)) return
+    if (!confirm(`Reject ticket(s) for ${name}?`)) return
     setActionId(ticketId)
     try {
       const res = await fetch(`/api/admin/tickets/${ticketId}/reject`, { method: 'POST' })
@@ -91,7 +100,8 @@ export default function AdminDashboard({ username }) {
         return
       }
       showNotif(`Rejected: ${name}`)
-      await fetchAll(filter)
+      fetchStats()
+      await fetchTickets(filter)
     } catch {
       showNotif('Network error', 'error')
     } finally {
@@ -162,7 +172,7 @@ export default function AdminDashboard({ username }) {
             {label}
           </button>
         ))}
-        <button onClick={() => fetchAll(filter)} style={s.refreshBtn}>
+        <button onClick={() => { fetchStats(); fetchTickets(filter) }} style={s.refreshBtn}>
           Refresh
         </button>
       </section>

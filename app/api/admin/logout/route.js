@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
-import { destroyAdminSession } from '@/lib/admin-auth'
+import { clearAdminCookie } from '@/lib/admin-auth'
 
 export const runtime = 'nodejs'
 
 export async function POST() {
-  await destroyAdminSession()
+  await clearAdminCookie()
   return NextResponse.json({ success: true })
 }
