@@ -12,6 +12,19 @@ export default function AdminDashboard({ username }) {
   const [loading, setLoading] = useState(true)
   const [actionId, setActionId] = useState(null)
   const [notif, setNotif] = useState(null)
+  const [receipt, setReceipt] = useState(null) // { name, url, loading }
+
+  async function openReceipt(ticketId, name) {
+    setReceipt({ name, url: null, loading: true })
+    try {
+      const res = await fetch(`/api/admin/tickets/${ticketId}/screenshot`)
+      if (!res.ok) { setReceipt({ name, url: null, loading: false }); return }
+      const data = await res.json()
+      setReceipt({ name, url: data.screenshot || null, loading: false })
+    } catch {
+      setReceipt({ name, url: null, loading: false })
+    }
+  }
 
   const showNotif = (msg, type = 'success') => {
     setNotif({ msg, type })
@@ -117,6 +130,31 @@ export default function AdminDashboard({ username }) {
 
   return (
     <div style={s.page}>
+      {/* Receipt modal */}
+      {receipt && (
+        <div style={s.modalOverlay} onClick={() => setReceipt(null)}>
+          <div style={s.modalBox} onClick={(e) => e.stopPropagation()}>
+            <div style={s.modalHeader}>
+              <span style={s.modalTitle}>Receipt — {receipt.name}</span>
+              <button style={s.modalClose} onClick={() => setReceipt(null)}>✕</button>
+            </div>
+            <div style={s.modalBody}>
+              {receipt.loading && <div style={s.modalMsg}>Loading receipt...</div>}
+              {!receipt.loading && !receipt.url && (
+                <div style={s.modalMsg}>No receipt image uploaded for this ticket.</div>
+              )}
+              {!receipt.loading && receipt.url && (
+                <img
+                  src={receipt.url}
+                  alt={`Payment receipt for ${receipt.name}`}
+                  style={s.modalImg}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {notif && (
         <div
           style={{
@@ -223,12 +261,12 @@ export default function AdminDashboard({ username }) {
                 )}
               </div>
 
-              {t.payment_screenshot && (
-                <div style={s.proofWrap}>
-                  <div style={s.proofLabel}>Payment Proof</div>
-                  <img src={t.payment_screenshot} alt="Payment proof" style={s.proofImg} />
-                </div>
-              )}
+              <button
+                style={s.receiptBtn}
+                onClick={() => openReceipt(t.id, t.name)}
+              >
+                View Receipt
+              </button>
 
               {t.status === 'pending' && (
                 <div style={s.actions}>
@@ -421,27 +459,7 @@ const s = {
     paddingTop: 12,
     borderTop: `1px solid ${C.bd}`,
   },
-  proofWrap: {
-    marginTop: 14,
-    padding: 12,
-    background: C.bg,
-    borderRadius: 10,
-    border: `1px solid ${C.bd}`,
-  },
-  proofLabel: {
-    fontSize: 10,
-    color: C.txD,
-    letterSpacing: 2,
-    fontWeight: 700,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-  },
-  proofImg: {
-    width: '100%',
-    maxHeight: 280,
-    objectFit: 'contain',
-    borderRadius: 8,
-  },
+
   actions: { display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' },
   approveBtn: {
     background: C.grn,
@@ -466,4 +484,69 @@ const s = {
     cursor: 'pointer',
   },
   created: { fontSize: 11, color: C.txD, marginTop: 12, letterSpacing: 0.5 },
+  receiptBtn: {
+    marginTop: 12,
+    background: 'transparent',
+    color: C.gold,
+    border: `1px solid ${C.gold}`,
+    borderRadius: 8,
+    padding: '7px 14px',
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: 'pointer',
+    letterSpacing: 0.5,
+  },
+  modalOverlay: {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(0,0,0,0.75)',
+    zIndex: 200,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalBox: {
+    background: C.card,
+    border: `1px solid ${C.bd}`,
+    borderRadius: 14,
+    width: '100%',
+    maxWidth: 560,
+    maxHeight: '90vh',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '14px 18px',
+    borderBottom: `1px solid ${C.bd}`,
+  },
+  modalTitle: { fontWeight: 700, fontSize: 15, color: C.tx },
+  modalClose: {
+    background: 'transparent',
+    border: 'none',
+    color: C.txM,
+    fontSize: 18,
+    cursor: 'pointer',
+    lineHeight: 1,
+    padding: 4,
+  },
+  modalBody: {
+    padding: 18,
+    overflowY: 'auto',
+    flex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalMsg: { color: C.txM, fontSize: 14, textAlign: 'center', padding: 32 },
+  modalImg: {
+    width: '100%',
+    maxHeight: '70vh',
+    objectFit: 'contain',
+    borderRadius: 8,
+  },
 }
