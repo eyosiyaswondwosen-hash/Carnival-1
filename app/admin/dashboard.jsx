@@ -225,7 +225,7 @@ export default function AdminDashboard({ username }) {
             <article key={t.id} style={s.ticketCard}>
               <header style={s.ticketHeader}>
                 <div>
-                  <div style={s.ticketName}>{t.name}</div>
+                  <div style={s.ticketName}>{t.name} <span style={s.ticketId}>#{t.id}</span></div>
                   <div style={s.ticketSub}>
                     {t.phone}
                     {t.email ? ` · ${t.email}` : ''}
@@ -439,6 +439,7 @@ const s = {
     gap: 12,
   },
   ticketName: { fontSize: 17, fontWeight: 700, color: C.tx },
+  ticketId: { fontSize: 13, fontWeight: 500, color: C.txM, marginLeft: 6 },
   ticketSub: { color: C.txM, fontSize: 13, marginTop: 2 },
   statusPill: {
     fontSize: 11,
