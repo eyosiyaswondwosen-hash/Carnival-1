@@ -45,11 +45,19 @@ export default function AdminDashboard({ username }) {
     setLoading(true)
     try {
       const res = await fetch(`/api/admin/tickets?filter=${currentFilter}`, { cache: 'no-store' })
+      console.log('[v0] tickets fetch:', currentFilter, res.status, res.ok)
       if (res.status === 401) { router.replace('/admin/login'); return }
-      if (!res.ok) { showNotif('Failed to load tickets', 'error'); return }
+      if (!res.ok) { 
+        const err = await res.json()
+        console.log('[v0] tickets error:', err)
+        showNotif('Failed to load tickets', 'error')
+        return 
+      }
       const data = await res.json()
+      console.log('[v0] tickets data:', data.tickets?.length)
       setTickets(data.tickets || [])
-    } catch {
+    } catch (e) {
+      console.log('[v0] tickets catch:', e.message)
       showNotif('Network error — check your connection', 'error')
     } finally {
       setLoading(false)
